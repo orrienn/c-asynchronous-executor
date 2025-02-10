@@ -12,7 +12,8 @@
 /**
  * @brief Structure to represent the current-thread executor.
  */
-struct Executor {
+struct Executor 
+{
     Future** queue;
     size_t queue_size;
     size_t queue_count;

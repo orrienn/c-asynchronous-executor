@@ -17,16 +17,18 @@ struct Executor
     Future** queue;
     size_t queue_size;
     size_t queue_count;
+    size_t active_count;
     Mio* mio;
 };
 
 Executor* executor_create(size_t max_queue_size) 
 {
     Executor* executor = malloc(sizeof(Executor));
-    if (!executor) return NULL;
+    if (!executor)
+        return NULL;
     
     executor->queue = malloc(sizeof(Future*) * max_queue_size);
-    if (!executor->queue) 
+    if(!executor->queue) 
     {
         free(executor);
         return NULL;
@@ -34,6 +36,8 @@ Executor* executor_create(size_t max_queue_size)
     
     executor->queue_size = max_queue_size;
     executor->queue_count = 0;
+    executor->active_count = 0;
+    
     executor->mio = mio_create(executor);
     if(!executor->mio) 
     {
@@ -48,45 +52,60 @@ Executor* executor_create(size_t max_queue_size)
 void waker_wake(Waker* waker) 
 {
     Executor* executor = (Executor*)waker->executor;
-    Future* future = waker->future;
+    Future* fut = waker->future;
+    if(!executor || !fut)
+        return;
     
-    if(!executor || !future) return;
+    for(size_t i = 0; i < executor->queue_count; i++) 
+    {
+        if(executor->queue[i] == fut)
+            return;
+    }
     
     if(executor->queue_count < executor->queue_size) 
-    {
-        executor->queue[executor->queue_count++] = future;
-    }
+        executor->queue[executor->queue_count++] = fut;
 }
 
 void executor_spawn(Executor* executor, Future* fut) 
 {
-    if(executor->queue_count < executor->queue_size) 
+    if(!fut->is_active) 
     {
-        executor->queue[executor->queue_count++] = fut;
         fut->is_active = true;
+        executor->active_count++;
+        if(executor->queue_count < executor->queue_size)
+            executor->queue[executor->queue_count++] = fut;
     }
 }
 
 
 void executor_run(Executor* executor) 
 {
-    while (executor->queue_count > 0) 
+    while(true) 
     {
-        for (size_t i = 0; i < executor->queue_count; i++) 
+        if(executor->queue_count > 0) 
         {
-            Future* fut = executor->queue[i];
-            if (!fut) continue;
+            size_t count = executor->queue_count;
+            executor->queue_count = 0;
 
-            FutureState state = fut->progress(fut, executor->mio, (Waker){executor, fut});
-            if(state == FUTURE_COMPLETED || state == FUTURE_FAILURE) 
+            for (size_t i = 0; i < count; i++) 
             {
-                fut->is_active = false;
-                executor->queue[i] = executor->queue[--executor->queue_count];
+                Future* fut = executor->queue[i];
+                FutureState state = fut->progress(fut, executor->mio, (Waker){executor, fut});
+                if(state == FUTURE_COMPLETED || state == FUTURE_FAILURE) 
+                {
+                    fut->is_active = false;
+                    if(executor->active_count > 0)
+                        executor->active_count--;
+                }
             }
+            continue;
+        } 
+        else 
+        {
+            if(executor->active_count == 0)
+                break;
+            mio_poll(executor->mio);
         }
-
-        if (executor->queue_count == 0) break;
-        mio_poll(executor->mio);
     }
 }
 

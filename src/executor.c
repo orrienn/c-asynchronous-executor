@@ -55,6 +55,9 @@ void waker_wake(Waker* waker)
     Future* fut = waker->future;
     if(!executor || !fut)
         return;
+
+    if (!fut->is_active)
+        return;
     
     for(size_t i = 0; i < executor->queue_count; i++) 
     {
